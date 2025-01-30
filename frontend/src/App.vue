@@ -17,7 +17,7 @@ const startBroadcasting = async () => {
     return
   }
 
-  ws.value = new WebSocket('ws://localhost:8000/ws?mode=broadcast')
+  ws.value = new WebSocket('ws://localhost:8080/ws?mode=broadcast')
 
   ws.value.onopen = () => {
     console.log("Conected to the server as a broadcaster")
@@ -42,7 +42,7 @@ const stopBroadcasting = () => {
 
 // Start listening (Opt-in)
 const startListening = async () => {
-  ws.value = new WebSocket('ws://localhost:8000/ws?mode=listen')
+  ws.value = new WebSocket('ws://localhost:8080/ws?mode=listen')
 
   ws.value.onmessage = event => {
     if (!audioContext) {
@@ -72,3 +72,51 @@ const stopListening = () => {
   isListening.value = false
 }
 </script>
+
+<template>
+  <div class="container text-center mt-5">
+    <h1 class="mb-4 text-primary">🎤 EchoLive - Karaoke Broadcast</h1>
+
+    <div class="d-flex justify-content-center gap-3">
+      <!-- Start Broadcast Button -->
+      <button 
+        v-if="!isBroadcasting" 
+        @click="startBroadcasting" 
+        class="btn btn-success">
+        🎙 Start Broadcasting
+      </button>
+
+      <!-- Stop Broadcast Button -->
+      <button 
+        v-if="isBroadcasting" 
+        @click="stopBroadcasting" 
+        class="btn btn-danger">
+        ⛔ Stop Broadcasting
+      </button>
+    </div>
+
+    <div class="mt-4 d-flex justify-content-center gap-3">
+      <!-- Start Listening Button -->
+      <button 
+        v-if="!isListening" 
+        @click="startListening" 
+        class="btn btn-primary">
+        🎧 Listen (Opt-in)
+      </button>
+
+      <!-- Stop Listening Button -->
+      <button 
+        v-if="isListening" 
+        @click="stopListening" 
+        class="btn btn-warning">
+        🔇 Stop Listening
+      </button>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.container {
+  max-width: 600px;
+}
+</style>

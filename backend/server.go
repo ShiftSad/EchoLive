@@ -64,6 +64,7 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 				log.Println(err)
 				break
 			}
+			fmt.Println("Received audio from broadcaster")
 			hub.broadcast <- p // forward audio to listeners
 		}
 

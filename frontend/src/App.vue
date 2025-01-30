@@ -10,9 +10,11 @@ const listeningSocket = ref<WebSocket | null>(null)
 let peerConnection: RTCPeerConnection;
 
 const startBroadcasting = async () => {
-  broadcastingSocket.value = new WebSocket('ws://localhost:8080/ws?role=broadcast')
+  const pendingCandidates: RTCIceCandidate[] = []
+
+  broadcastingSocket.value = new WebSocket('ws://localhost:8080/ws')
   isBroadcasting.value = true
-  
+
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
 
   peerConnection = new RTCPeerConnection({
@@ -25,15 +27,111 @@ const startBroadcasting = async () => {
 
   peerConnection.onicecandidate = (event) => {
     if (event.candidate) {
-      broadcastingSocket.value?.send(JSON.stringify({ candidate: event.candidate }));
+      broadcastingSocket.value?.send(JSON.stringify({ 
+        type: 'candidate',
+        candidate: event.candidate 
+      }))
     }
   }
 
   const offer = await peerConnection.createOffer();
   await peerConnection.setLocalDescription(offer);
-  broadcastingSocket.value?.send(JSON.stringify({ offer }));
+  broadcastingSocket.value?.send(JSON.stringify({ 
+    type: 'offer',
+    offer 
+  }))
+
+  if (broadcastingSocket.value) {
+    broadcastingSocket.value.onmessage = async (event) => {
+      const data = JSON.parse(event.data);
+      
+      console.log('Received data:', data);
+      if (data.answer) {
+        // Only set the remote answer if we actually have a local offer
+        if (peerConnection.signalingState === 'have-local-offer') {
+          console.log('Setting remote description')
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer))
+          for (const candidate of pendingCandidates) {
+            await peerConnection.addIceCandidate(candidate)
+          }
+        } else {
+          console.warn('Ignoring remote answer, signalingState:', peerConnection.signalingState)
+        }
+      } else if (data.candidate) {
+        const candidate = new RTCIceCandidate(data.candidate)
+        if (peerConnection.remoteDescription) {
+          await peerConnection.addIceCandidate(candidate)
+        } else pendingCandidates.push(candidate)
+        console.log('Received candidate:', candidate)
+      }
+    }
+  };
 }
 
+const startListening = async () => {
+  listeningSocket.value = new WebSocket('ws://localhost:8080/ws')
+  isListening.value = true
+
+  // Create a new RTCPeerConnection for listening
+  peerConnection = new RTCPeerConnection({
+    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+  })
+
+  // Receive audio track
+  peerConnection.ontrack = (event) => {
+    const [remoteStream] = event.streams
+    const audio = new Audio()
+    audio.srcObject = remoteStream
+    audio.play()
+  }
+
+  // Send ICE candidates to server
+  peerConnection.onicecandidate = (event) => {
+    if (event.candidate) {
+      listeningSocket.value?.send(JSON.stringify({ 
+        type: 'candidate',
+        candidate: event.candidate 
+      }))
+    }
+  }
+
+  // Listen for offer and respond with an answer
+  if (listeningSocket.value) {
+    listeningSocket.value.onmessage = async (event) => {
+      const data = JSON.parse(event.data)
+
+      if (data.offer) {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer))
+        const answer = await peerConnection.createAnswer()
+        await peerConnection.setLocalDescription(answer)
+        listeningSocket.value?.send(JSON.stringify({ type: 'answer', answer }))
+      } else if (data.candidate) {
+        const candidate = new RTCIceCandidate(data.candidate)
+        if (peerConnection.remoteDescription) {
+          await peerConnection.addIceCandidate(candidate)
+        }
+      }
+    }
+  }
+}
+
+const stopBroadcasting = () => {
+  if (broadcastingSocket.value && broadcastingSocket.value.readyState === WebSocket.OPEN) {
+    broadcastingSocket.value.close()
+    listeningSocket.value = null
+  }
+  isBroadcasting.value = false
+  peerConnection?.close()
+}
+
+const stopListening = () => {
+  if (listeningSocket.value && listeningSocket.value.readyState === WebSocket.OPEN) {
+    listeningSocket.value.close()
+    listeningSocket.value = null
+  }
+  isListening.value = false
+  peerConnection?.close()
+}
 </script>
 
 <template>

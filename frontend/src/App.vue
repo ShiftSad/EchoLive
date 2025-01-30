@@ -3,127 +3,125 @@ import { ref } from 'vue'
 
 const isBroadcasting = ref(false)
 const isListening = ref(false)
-const broadcastWs = ref<WebSocket | null>(null)
-const listenerWs = ref<WebSocket | null>(null)
+const peerConnection = ref<RTCPeerConnection | null>(null)
+const remoteAudioStream = ref<MediaStream | null>(null)
+let localStream: MediaStream | null = null
+let wsSignal: WebSocket | null = null
 
-let mediaRecorder: MediaRecorder | null = null
-let audioContext: AudioContext | null = null
-let source: AudioBufferSourceNode | null = null
+// WebRTC Configuration (STUN server for NAT traversal)
+const rtcConfig = {
+  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+}
 
-// Start broadcasting
+// Start broadcasting (WebRTC PeerConnection)
 const startBroadcasting = async () => {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-  mediaRecorder = new MediaRecorder(stream, {
-    mimeType: 'audio/webm;codecs=opus'
+  localStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+  peerConnection.value = new RTCPeerConnection(rtcConfig)
+
+  // Add microphone stream to PeerConnection
+  localStream.getTracks().forEach(track => {
+    peerConnection.value!.addTrack(track, localStream!)
   })
+
+  // Set up WebSocket signaling to exchange WebRTC offers/answers
+  wsSignal = new WebSocket('ws://localhost:8080/ws?mode=broadcast')
   
-  broadcastWs.value = new WebSocket('ws://localhost:8080/ws?mode=broadcast')
-  
-  broadcastWs.value.onopen = () => {
-    console.log('Broadcaster WebSocket connected')
-    mediaRecorder?.start(100)
+  wsSignal.onopen = () => {
+    console.log('Signal server connected (broadcaster)')
     isBroadcasting.value = true
   }
 
-  broadcastWs.value.onerror = (error) => {
-    console.error('Broadcast WebSocket error:', error)
-  }
+  wsSignal.onmessage = async (message) => {
+    const data = JSON.parse(message.data)
 
-  mediaRecorder.ondataavailable = (e) => {
-    console.log('Broadcasting chunk size:', e.data.size)
-    if (broadcastWs.value?.readyState === WebSocket.OPEN) {
-      broadcastWs.value.send(e.data)
+    if (data.type === 'answer') {
+      console.log('Received answer:', data)
+      await peerConnection.value!.setRemoteDescription(new RTCSessionDescription(data))
     }
   }
+
+  // Generate WebRTC offer
+  const offer = await peerConnection.value.createOffer()
+  await peerConnection.value.setLocalDescription(offer)
+
+  if (wsSignal.readyState === WebSocket.OPEN) wsSignal.send(JSON.stringify({ type: 'offer', offer }))
 }
 
+// Stop broadcasting
 const stopBroadcasting = () => {
-  mediaRecorder?.stop()
-  broadcastWs.value?.close()
+  peerConnection.value?.close()
+  localStream?.getTracks().forEach(track => track.stop())
+  wsSignal?.close()
+  
   isBroadcasting.value = false
 }
 
-// Start listening (Opt-in)
+// Start listening (receiving WebRTC audio)
 const startListening = () => {
-  listenerWs.value = new WebSocket('ws://localhost:8080/ws?mode=listen')
+  peerConnection.value = new RTCPeerConnection(rtcConfig)
 
-  listenerWs.value.onopen = () => {
-    console.log('Listener WebSocket connected')
+  peerConnection.value.ontrack = (event) => {
+    remoteAudioStream.value = event.streams[0]
+    console.log('Received remote audio stream')
+    
+    // Play the received audio stream
+    const audio = new Audio()
+    audio.srcObject = remoteAudioStream.value
+    audio.play()
+  }
+
+  // Connect to WebSocket signaling server
+  wsSignal = new WebSocket('ws://localhost:8080/ws?mode=listen')
+
+  wsSignal.onopen = () => {
+    console.log('Signal server connected (listener)')
     isListening.value = true
   }
 
-  listenerWs.value.onmessage = async (event) => {
-    console.log('Received audio data of type:', event.data.type)
-    
-    try {
-      if (!audioContext) {
-        audioContext = new AudioContext()
-      }
+  wsSignal.onmessage = async (message) => {
+    const data = JSON.parse(message.data)
 
-      const buffer = await event.data.arrayBuffer()
-      console.log('Buffer received, size:', buffer.byteLength)
-      
-      audioContext.decodeAudioData(
-        buffer,
-        (decoded) => {
-          source = audioContext!.createBufferSource()
-          source.buffer = decoded
-          source.connect(audioContext!.destination)
-          source.start()
-        },
-        (error) => {
-          console.error('Error decoding audio:', error)
-        }
-      )
-    } catch (error) {
-      console.error('Error in audio processing:', error)
+    if (data.type === 'offer') {
+      console.log('Received offer:', data)
+
+      await peerConnection.value!.setRemoteDescription(new RTCSessionDescription(data.offer))
+      const answer = await peerConnection.value!.createAnswer()
+      await peerConnection.value!.setLocalDescription(answer)
+
+      wsSignal?.send(JSON.stringify({ type: 'answer', answer }))
     }
   }
 }
 
+// Stop listening
 const stopListening = () => {
-  if (source) source.stop()
-  listenerWs.value?.close()
+  peerConnection.value?.close()
+  remoteAudioStream.value = null
+  wsSignal?.close()
   isListening.value = false
 }
 </script>
 
 <template>
   <div class="container text-center mt-5">
-    <h1 class="mb-4 text-primary">🎤 EchoLive - Karaoke Broadcast</h1>
+    <h1 class="mb-4 text-primary">🎤 EchoLive - WebRTC Karaoke</h1>
 
     <div class="d-flex justify-content-center gap-3">
-      <!-- Start Broadcast Button -->
-      <button 
-        v-if="!isBroadcasting" 
-        @click="startBroadcasting" 
-        class="btn btn-success">
+      <button v-if="!isBroadcasting" @click="startBroadcasting" class="btn btn-success">
         🎙 Start Broadcasting
       </button>
 
-      <!-- Stop Broadcast Button -->
-      <button 
-        v-if="isBroadcasting" 
-        @click="stopBroadcasting" 
-        class="btn btn-danger">
+      <button v-if="isBroadcasting" @click="stopBroadcasting" class="btn btn-danger">
         ⛔ Stop Broadcasting
       </button>
     </div>
 
     <div class="mt-4 d-flex justify-content-center gap-3">
-      <!-- Start Listening Button -->
-      <button 
-        v-if="!isListening" 
-        @click="startListening" 
-        class="btn btn-primary">
+      <button v-if="!isListening" @click="startListening" class="btn btn-primary">
         🎧 Listen (Opt-in)
       </button>
 
-      <!-- Stop Listening Button -->
-      <button 
-        v-if="isListening" 
-        @click="stopListening" 
-        class="btn btn-warning">
+      <button v-if="isListening" @click="stopListening" class="btn btn-warning">
         🔇 Stop Listening
       </button>
     </div>

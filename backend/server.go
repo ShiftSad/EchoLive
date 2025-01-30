@@ -1,122 +1,119 @@
 package main
 
 import (
-	"fmt"
-	"github.com/gorilla/websocket"
-	"log"
-	"net/http"
-	"sync"
+    "fmt"
+    "log"
+    "net/http"
+
+    "github.com/gorilla/websocket"
+    "sync"
 )
 
-// WebSocket upgrader
+// WebSocket upgrader configuration
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
+    CheckOrigin: func(r *http.Request) bool {
+        // Adjust to your needs; in production, be sure to verify the origin.
+        return true
+    },
 }
 
-// Hub to manage users
-type Hub struct {
-	mu           sync.Mutex
-	broadcasters map[*websocket.Conn]bool
-	listeners    map[*websocket.Conn]bool
-	broadcast    chan []byte
+// Client represents a single WebSocket connection
+type Client struct {
+    conn *websocket.Conn
+    role string
 }
 
-var hub = Hub{
-	broadcasters: make(map[*websocket.Conn]bool),
-	listeners:    make(map[*websocket.Conn]bool),
-	broadcast:    make(chan []byte),
-}
+// We maintain separate sets for broadcasters and listeners.
+// Using sync.Mutex to protect these sets during concurrent reads/writes.
+var (
+    broadcasters = make(map[*Client]bool)
+    listeners    = make(map[*Client]bool)
+    mu           sync.Mutex
+)
 
 func main() {
-	http.HandleFunc("/ws", handleConnections)
-	go handleBroadcasts()
+    http.HandleFunc("/ws", handleConnections)
 
-	port := ":8080"
-	fmt.Println("Server running on port", port)
-	log.Fatal(http.ListenAndServe(port, nil))
+    fmt.Println("Server running on port 8080")
+    log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
+// handleConnections upgrades the HTTP connection to a WebSocket
+// and adds the client to the appropriate set (broadcasters or listeners).
 func handleConnections(w http.ResponseWriter, r *http.Request) {
     conn, err := upgrader.Upgrade(w, r, nil)
     if err != nil {
-        log.Fatal(err)
+        log.Println("WebSocket Upgrade Error:", err)
         return
     }
+
+    // Ensure the connection is closed when this function returns
     defer conn.Close()
 
-    query := r.URL.Query()
-    mode := query.Get("mode")
-    
-    if mode == "broadcast" {
-        handleBroadcaster(conn)
-    } else if mode == "listen" {
-        handleListener(conn)
-    } else {
-        log.Printf("Invalid mode: %s", mode)
-        return
+    // Determine role from query param: ?mode=broadcast or ?mode=listen
+    role := r.URL.Query().Get("mode")
+    client := &Client{conn: conn, role: role}
+
+    mu.Lock()
+    switch role {
+    case "broadcast":
+        broadcasters[client] = true
+        fmt.Println("Broadcaster connected")
+    case "listen":
+        listeners[client] = true
+        fmt.Println("Listener connected")
+    default:
+        // If neither role is provided, you might decide to close or handle differently.
+        // We'll treat them as a listener by default or just disconnect:
+        listeners[client] = true
+        fmt.Println("Unspecified role, treating as listener")
     }
-}
+    mu.Unlock()
 
-func handleBroadcaster(conn *websocket.Conn) {
-    hub.mu.Lock()
-    hub.broadcasters[conn] = true
-    hub.mu.Unlock()
-    log.Printf("New broadcaster connected. Total broadcasters: %d", len(hub.broadcasters))
-
+    // Read loop for messages from this client
     for {
-        messageType, p, err := conn.ReadMessage()
+        mt, message, err := conn.ReadMessage()
         if err != nil {
-            log.Printf("Broadcaster error: %v", err)
+            log.Printf("Client (%s) disconnected: %v", role, err)
+            removeClient(client)
             break
         }
-        log.Printf("Received message type: %d, size: %d bytes", messageType, len(p))
-        hub.broadcast <- p
-    }
 
-    hub.mu.Lock()
-    delete(hub.broadcasters, conn)
-    hub.mu.Unlock()
-}
-
-func handleListener(conn *websocket.Conn) {
-    hub.mu.Lock()
-    hub.listeners[conn] = true
-    listenerCount := len(hub.listeners)
-    hub.mu.Unlock()
-    
-    log.Printf("New listener connected. Total listeners: %d", listenerCount)
-
-    // Keep connection alive until client disconnects
-    for {
-        _, _, err := conn.ReadMessage()
-        if err != nil {
-            log.Printf("Listener disconnected: %v", err)
-            hub.mu.Lock()
-            delete(hub.listeners, conn)
-            hub.mu.Unlock()
-            return
-        }
-    }
-}
-
-// Broadcast received audio to opted-in listeners
-func handleBroadcasts() {
-    for {
-        msg := <-hub.broadcast
-        hub.mu.Lock()
-        listenerCount := len(hub.listeners)
-        log.Printf("Broadcasting %d bytes to %d listeners", len(msg), listenerCount)
-        
-        for conn := range hub.listeners {
-            err := conn.WriteMessage(websocket.BinaryMessage, msg)
-            if err != nil {
-                log.Printf("Error sending to listener: %v", err)
-                conn.Close()
-                delete(hub.listeners, conn)
+        // Route messages based on the client's role
+        if role == "broadcast" {
+            // Forward the broadcaster's message to all listeners
+            mu.Lock()
+            for listener := range listeners {
+                // Forward the exact message
+                if err := listener.conn.WriteMessage(mt, message); err != nil {
+                    log.Println("Error writing to listener:", err)
+                }
             }
+            mu.Unlock()
+        } else {
+            // Forward the listener's message to all broadcasters
+            mu.Lock()
+            for broadcaster := range broadcasters {
+                if err := broadcaster.conn.WriteMessage(mt, message); err != nil {
+                    log.Println("Error writing to broadcaster:", err)
+                }
+            }
+            mu.Unlock()
         }
-        hub.mu.Unlock()
+    }
+}
+
+// removeClient removes the given client from whichever map it belongs to
+func removeClient(c *Client) {
+    mu.Lock()
+    defer mu.Unlock()
+
+    switch c.role {
+    case "broadcast":
+        delete(broadcasters, c)
+    case "listen":
+        delete(listeners, c)
+    default:
+        delete(listeners, c)
     }
 }

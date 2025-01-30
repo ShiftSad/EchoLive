@@ -2,9 +2,8 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="2601da72-8e49-4d6c-812d-857bb94d9f80" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/discord.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/server.go" beforeDir="false" afterPath="$PROJECT_DIR$/backend/server.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/App.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/App.vue" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -134,6 +133,7 @@
       <workItem from="1738249084124" duration="38000" />
       <workItem from="1738249133185" duration="27000" />
       <workItem from="1738249165558" duration="13000" />
+      <workItem from="1738256576916" duration="56000" />
     </task>
     <servers />
   </component>

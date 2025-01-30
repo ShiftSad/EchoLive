@@ -8,7 +8,7 @@ const isListening = ref(false)
 let mediaRecorder: MediaRecorder | null = null
 let audioChunks: Blob[] = []
 let audioContext: AudioContext | null = null
-let source: MediaStreamAudioSourceNode | null = null
+let source: AudioBufferSourceNode | null = null
 
 // Start broadcasting
 const startBroadcasting = async () => {
@@ -32,5 +32,43 @@ const startBroadcasting = async () => {
   }
 
   mediaRecorder.start(50) // Send audio in 50ms chunks
+}
+
+const stopBroadcasting = () => {
+  mediaRecorder?.stop()
+  ws.value?.close()
+  isBroadcasting.value = false
+}
+
+// Start listening (Opt-in)
+const startListening = async () => {
+  ws.value = new WebSocket('ws://localhost:8000/ws?mode=listen')
+
+  ws.value.onmessage = event => {
+    if (!audioContext) {
+      audioContext = new AudioContext()
+    }
+
+    event.data.arrayBuffer().then((buffer: ArrayBuffer) => {
+      if (audioContext) {
+        audioContext.decodeAudioData(buffer, (decoded: AudioBuffer) => {
+          source = audioContext!!.createBufferSource()
+          if (source) {
+            source.buffer = decoded
+            source.connect(audioContext!!.destination)
+            source.start()
+          }
+        })
+      }
+    })
+  }
+
+  isListening.value = true
+}
+
+const stopListening = () => {
+  if (source) source.stop()
+  if (ws.value) ws.value.close()
+  isListening.value = false
 }
 </script>

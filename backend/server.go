@@ -16,13 +16,11 @@ var upgrader = websocket.Upgrader{
 
 type Client struct {
     conn *websocket.Conn
-    role string
 }
 
 // Connected clients
-var broadcasters = make(map[*Client]bool)
-var listeners    = make(map[*Client]bool)
-var mutex = &sync.Mutex{}
+var clients = make(map[*Client]bool)
+var mutex   = &sync.Mutex{}
 
 var broadcast = make(chan []byte)
 
@@ -34,32 +32,15 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	role := r.URL.Query().Get("role")
-    switch role {
-    case "broadcast":
-        broadcasters[&Client{conn, role}] = true
-        fmt.Println("New broadcaster connected")
-    case "listen":
-        listeners[&Client{conn, role}] = true
-        fmt.Println("New listener connected")
-    case "both":
-        broadcasters[&Client{conn, "broadcast"}] = true
-        listeners[&Client{conn, "listen"}] = true
-        fmt.Println("New broadcaster and listener connected")
-    }
+    clients[&Client{conn}] = true
+    fmt.Println("New client connected, total clients:", len(clients))
 
 	for {
-        // Only read messages from broadcasters
-        if role != "broadcast" {
-            continue
-        }
-
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			log.Println("Read error:", err)
             mutex.Lock()
-            delete(broadcasters, &Client{conn, role})
-            delete(listeners, &Client{conn, role})
+            delete(clients, &Client{conn})
             mutex.Unlock()
             break
 		}
@@ -75,12 +56,12 @@ func handleMessages() {
         fmt.Println("Broadcasting message:", string(msg))
 		// Send message to all connected clients
 		mutex.Lock()
-		for listener := range listeners {
-            err := listener.conn.WriteMessage(websocket.TextMessage, msg)
+		for client := range clients {
+            err := client.conn.WriteMessage(websocket.TextMessage, msg)
             if err != nil {
                 log.Println("Write error:", err)
-                listener.conn.Close()
-				delete(listeners, listener)
+                client.conn.Close()
+				delete(clients, client)
             }
 		}
 		mutex.Unlock()

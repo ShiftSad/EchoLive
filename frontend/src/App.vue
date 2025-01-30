@@ -18,5 +18,19 @@ const startBroadcasting = async () => {
   }
 
   ws.value = new WebSocket('ws://localhost:8000/ws?mode=broadcast')
+
+  ws.value.onopen = () => {
+    console.log("Conected to the server as a broadcaster")
+    isBroadcasting.value = true
+  }
+
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+  mediaRecorder = new MediaRecorder(stream)
+
+  mediaRecorder.ondataavailable = (e) => {
+    ws.value?.send(e.data)
+  }
+
+  mediaRecorder.start(50) // Send audio in 50ms chunks
 }
 </script>

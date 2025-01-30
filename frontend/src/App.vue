@@ -1,74 +1,89 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 
-const ws = ref<WebSocket | null>(null)
 const isBroadcasting = ref(false)
 const isListening = ref(false)
+const broadcastWs = ref<WebSocket | null>(null)
+const listenerWs = ref<WebSocket | null>(null)
 
 let mediaRecorder: MediaRecorder | null = null
-let audioChunks: Blob[] = []
 let audioContext: AudioContext | null = null
 let source: AudioBufferSourceNode | null = null
 
 // Start broadcasting
 const startBroadcasting = async () => {
-  if (!navigator.mediaDevices.getUserMedia) {
-    alert("Your browser does not support the MediaStream API")
-    return
-  }
-
-  ws.value = new WebSocket('ws://localhost:8080/ws?mode=broadcast')
-
-  ws.value.onopen = () => {
-    console.log("Conected to the server as a broadcaster")
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+  mediaRecorder = new MediaRecorder(stream, {
+    mimeType: 'audio/webm;codecs=opus'
+  })
+  
+  broadcastWs.value = new WebSocket('ws://localhost:8080/ws?mode=broadcast')
+  
+  broadcastWs.value.onopen = () => {
+    console.log('Broadcaster WebSocket connected')
+    mediaRecorder?.start(100)
     isBroadcasting.value = true
   }
 
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-  mediaRecorder = new MediaRecorder(stream)
-
-  mediaRecorder.ondataavailable = (e) => {
-    ws.value?.send(e.data)
+  broadcastWs.value.onerror = (error) => {
+    console.error('Broadcast WebSocket error:', error)
   }
 
-  mediaRecorder.start(50) // Send audio in 50ms chunks
+  mediaRecorder.ondataavailable = (e) => {
+    console.log('Broadcasting chunk size:', e.data.size)
+    if (broadcastWs.value?.readyState === WebSocket.OPEN) {
+      broadcastWs.value.send(e.data)
+    }
+  }
 }
 
 const stopBroadcasting = () => {
   mediaRecorder?.stop()
-  ws.value?.close()
+  broadcastWs.value?.close()
   isBroadcasting.value = false
 }
 
 // Start listening (Opt-in)
-const startListening = async () => {
-  ws.value = new WebSocket('ws://localhost:8080/ws?mode=listen')
+const startListening = () => {
+  listenerWs.value = new WebSocket('ws://localhost:8080/ws?mode=listen')
 
-  ws.value.onmessage = event => {
-    if (!audioContext) {
-      audioContext = new AudioContext()
-    }
-
-    event.data.arrayBuffer().then((buffer: ArrayBuffer) => {
-      if (audioContext) {
-        audioContext.decodeAudioData(buffer, (decoded: AudioBuffer) => {
-          source = audioContext!!.createBufferSource()
-          if (source) {
-            source.buffer = decoded
-            source.connect(audioContext!!.destination)
-            source.start()
-          }
-        })
-      }
-    })
+  listenerWs.value.onopen = () => {
+    console.log('Listener WebSocket connected')
+    isListening.value = true
   }
 
-  isListening.value = true
+  listenerWs.value.onmessage = async (event) => {
+    console.log('Received audio data of type:', event.data.type)
+    
+    try {
+      if (!audioContext) {
+        audioContext = new AudioContext()
+      }
+
+      const buffer = await event.data.arrayBuffer()
+      console.log('Buffer received, size:', buffer.byteLength)
+      
+      audioContext.decodeAudioData(
+        buffer,
+        (decoded) => {
+          source = audioContext!.createBufferSource()
+          source.buffer = decoded
+          source.connect(audioContext!.destination)
+          source.start()
+        },
+        (error) => {
+          console.error('Error decoding audio:', error)
+        }
+      )
+    } catch (error) {
+      console.error('Error in audio processing:', error)
+    }
+  }
 }
 
 const stopListening = () => {
   if (source) source.stop()
-  if (ws.value) ws.value.close()
+  listenerWs.value?.close()
   isListening.value = false
 }
 </script>

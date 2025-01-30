@@ -3,103 +3,37 @@ import { ref } from 'vue'
 
 const isBroadcasting = ref(false)
 const isListening = ref(false)
-const peerConnection = ref<RTCPeerConnection | null>(null)
-const remoteAudioStream = ref<MediaStream | null>(null)
-let localStream: MediaStream | null = null
-let wsSignal: WebSocket | null = null
 
-// WebRTC Configuration (STUN server for NAT traversal)
-const rtcConfig = {
-  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-}
+const broadcastingSocket = ref<WebSocket | null>(null)
+const listeningSocket = ref<WebSocket | null>(null)
 
-// Start broadcasting (WebRTC PeerConnection)
+let peerConnection: RTCPeerConnection;
+
 const startBroadcasting = async () => {
-  localStream = await navigator.mediaDevices.getUserMedia({ audio: true })
-  peerConnection.value = new RTCPeerConnection(rtcConfig)
+  broadcastingSocket.value = new WebSocket('ws://localhost:8080/ws?role=broadcast')
+  isBroadcasting.value = true
+  
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
 
-  // Add microphone stream to PeerConnection
-  localStream.getTracks().forEach(track => {
-    peerConnection.value!.addTrack(track, localStream!)
+  peerConnection = new RTCPeerConnection({
+    iceServers: [
+      { "urls": "stun:stun.l.google.com:19302" }
+    ],
   })
 
-  // Set up WebSocket signaling to exchange WebRTC offers/answers
-  wsSignal = new WebSocket('ws://localhost:8080/ws?mode=broadcast')
-  
-  wsSignal.onopen = () => {
-    console.log('Signal server connected (broadcaster)')
-    isBroadcasting.value = true
-  }
+  stream.getTracks().forEach(track => peerConnection.addTrack(track, stream))
 
-  wsSignal.onmessage = async (message) => {
-    const data = JSON.parse(message.data)
-
-    if (data.type === 'answer') {
-      console.log('Received answer:', data)
-      await peerConnection.value!.setRemoteDescription(new RTCSessionDescription(data))
+  peerConnection.onicecandidate = (event) => {
+    if (event.candidate) {
+      broadcastingSocket.value?.send(JSON.stringify({ candidate: event.candidate }));
     }
   }
 
-  // Generate WebRTC offer
-  const offer = await peerConnection.value.createOffer()
-  await peerConnection.value.setLocalDescription(offer)
-
-  if (wsSignal.readyState === WebSocket.OPEN) wsSignal.send(JSON.stringify({ type: 'offer', offer }))
+  const offer = await peerConnection.createOffer();
+  await peerConnection.setLocalDescription(offer);
+  broadcastingSocket.value?.send(JSON.stringify({ offer }));
 }
 
-// Stop broadcasting
-const stopBroadcasting = () => {
-  peerConnection.value?.close()
-  localStream?.getTracks().forEach(track => track.stop())
-  wsSignal?.close()
-  
-  isBroadcasting.value = false
-}
-
-// Start listening (receiving WebRTC audio)
-const startListening = () => {
-  peerConnection.value = new RTCPeerConnection(rtcConfig)
-
-  peerConnection.value.ontrack = (event) => {
-    remoteAudioStream.value = event.streams[0]
-    console.log('Received remote audio stream')
-    
-    // Play the received audio stream
-    const audio = new Audio()
-    audio.srcObject = remoteAudioStream.value
-    audio.play()
-  }
-
-  // Connect to WebSocket signaling server
-  wsSignal = new WebSocket('ws://localhost:8080/ws?mode=listen')
-
-  wsSignal.onopen = () => {
-    console.log('Signal server connected (listener)')
-    isListening.value = true
-  }
-
-  wsSignal.onmessage = async (message) => {
-    const data = JSON.parse(message.data)
-
-    if (data.type === 'offer') {
-      console.log('Received offer:', data)
-
-      await peerConnection.value!.setRemoteDescription(new RTCSessionDescription(data.offer))
-      const answer = await peerConnection.value!.createAnswer()
-      await peerConnection.value!.setLocalDescription(answer)
-
-      wsSignal?.send(JSON.stringify({ type: 'answer', answer }))
-    }
-  }
-}
-
-// Stop listening
-const stopListening = () => {
-  peerConnection.value?.close()
-  remoteAudioStream.value = null
-  wsSignal?.close()
-  isListening.value = false
-}
 </script>
 
 <template>

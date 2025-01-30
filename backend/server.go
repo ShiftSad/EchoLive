@@ -53,7 +53,7 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
         if role != "broadcast" {
             continue
         }
-        
+
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			log.Println("Read error:", err)
@@ -72,7 +72,7 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 func handleMessages() {
 	for {
 		msg := <-broadcast
-
+        fmt.Println("Broadcasting message:", string(msg))
 		// Send message to all connected clients
 		mutex.Lock()
 		for listener := range listeners {

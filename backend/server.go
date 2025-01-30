@@ -39,59 +39,84 @@ func main() {
 }
 
 func handleConnections(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer conn.Close()
+    conn, err := upgrader.Upgrade(w, r, nil)
+    if err != nil {
+        log.Fatal(err)
+        return
+    }
+    defer conn.Close()
 
-	query := r.URL.Query()
-	mode := query.Get("mode") // broadcaster or listener
+    query := r.URL.Query()
+    mode := query.Get("mode")
+    
+    if mode == "broadcast" {
+        handleBroadcaster(conn)
+    } else if mode == "listen" {
+        handleListener(conn)
+    } else {
+        log.Printf("Invalid mode: %s", mode)
+        return
+    }
+}
 
-	hub.mu.Lock()
-	if mode == "broadcast" {
-		hub.broadcasters[conn] = true
-	} else if mode == "listen" {
-		hub.listeners[conn] = true
-	}
-	hub.mu.Unlock()
+func handleBroadcaster(conn *websocket.Conn) {
+    hub.mu.Lock()
+    hub.broadcasters[conn] = true
+    hub.mu.Unlock()
+    log.Printf("New broadcaster connected. Total broadcasters: %d", len(hub.broadcasters))
 
-	// read and forward audio only if broadcaster
-	if mode == "broadcast" {
-		for {
-			_, p, err := conn.ReadMessage()
-			if err != nil {
-				log.Println(err)
-				break
-			}
-			fmt.Println("Received audio from broadcaster")
-			hub.broadcast <- p // forward audio to listeners
-		}
+    for {
+        messageType, p, err := conn.ReadMessage()
+        if err != nil {
+            log.Printf("Broadcaster error: %v", err)
+            break
+        }
+        log.Printf("Received message type: %d, size: %d bytes", messageType, len(p))
+        hub.broadcast <- p
+    }
 
-		// Remove broadcaster from hub
-		hub.mu.Lock()
-		delete(hub.broadcasters, conn)
-		hub.mu.Unlock()
-	}
+    hub.mu.Lock()
+    delete(hub.broadcasters, conn)
+    hub.mu.Unlock()
+}
 
-	// Remove listener on disconnect
-	hub.mu.Lock()
-	delete(hub.listeners, conn)
-	hub.mu.Unlock()
+func handleListener(conn *websocket.Conn) {
+    hub.mu.Lock()
+    hub.listeners[conn] = true
+    listenerCount := len(hub.listeners)
+    hub.mu.Unlock()
+    
+    log.Printf("New listener connected. Total listeners: %d", listenerCount)
+
+    // Keep connection alive until client disconnects
+    for {
+        _, _, err := conn.ReadMessage()
+        if err != nil {
+            log.Printf("Listener disconnected: %v", err)
+            hub.mu.Lock()
+            delete(hub.listeners, conn)
+            hub.mu.Unlock()
+            return
+        }
+    }
 }
 
 // Broadcast received audio to opted-in listeners
 func handleBroadcasts() {
-	for {
-		msg := <-hub.broadcast
-		hub.mu.Lock()
-		for conn := range hub.listeners { // Send only to listeners
-			err := conn.WriteMessage(websocket.BinaryMessage, msg)
-			if err != nil {
-				conn.Close()
-				delete(hub.listeners, conn)
-			}
-		}
-		hub.mu.Unlock()
-	}
+    for {
+        msg := <-hub.broadcast
+        hub.mu.Lock()
+        listenerCount := len(hub.listeners)
+        log.Printf("Broadcasting %d bytes to %d listeners", len(msg), listenerCount)
+        
+        for conn := range hub.listeners {
+            err := conn.WriteMessage(websocket.BinaryMessage, msg)
+            if err != nil {
+                log.Printf("Error sending to listener: %v", err)
+                conn.Close()
+                delete(hub.listeners, conn)
+            }
+        }
+        hub.mu.Unlock()
+    }
 }

@@ -1,12 +1,16 @@
-[build]
-  builder = "Nixpacks"
+[phases]
 
-[[services]]
-name = "backend"
-build_command = "cd backend && go build -ldflags '-s -w' -o server server.go"
-start_command = "./backend/server"
+[phases.backend]
+directory = "backend"
+commands = [
+  "go build -ldflags '-s -w' -o server server.go"
+]
+run = "./server"
 
-[[services]]
-name = "frontend"
-build_command = "cd frontend && npm install && npm run build"
-start_command = "cd frontend && npm run preview"
+[phases.frontend]
+directory = "frontend"
+commands = [
+  "npm install",
+  "npm run build"
+]
+run = "npm run preview"

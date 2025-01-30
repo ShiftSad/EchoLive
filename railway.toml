@@ -1,0 +1,16 @@
+[phases]
+
+[phases.backend]
+directory = "backend"
+commands = [
+  "go build -ldflags '-s -w' -o server server.go"
+]
+run = "./server"
+
+[phases.frontend]
+directory = "frontend"
+commands = [
+  "npm install",
+  "npm run build"
+]
+run = "npm run preview"
